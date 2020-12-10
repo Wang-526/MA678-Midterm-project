@@ -1,0 +1,184 @@
+---
+title: "MA678 Midterm project"
+author: "Yuxi Wang"
+date: "2020/11/09"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+pacman::p_load(
+'tidyverse',
+'lme4',
+'factoextra',
+'coefplot',
+'pander',
+'car',
+'cowplot'
+)
+```
+
+# Abstract
+Santander Group wants to identify the value of transactions for each potential customer. They use some indicators to describe the value of transactions for each potential customer. I want to use such data is because I want to engage in related work in the field of financial data analysis. Moreover, I think it is necessary for every company to learn and try to judge the value of its customers or clients. For the dataset, there are 4993 features and 4459 observations in it. Through EDA and basic dimensionality reduction methods, like PCA and clustering, I sorted out the entire messy data set. Then I used a multilevel regression model for modeling the data.
+
+# 1. Introduction
+In this project, Santander invites people to help them identify which customers will make a specific transaction in the future. The data provided for this competition has the same structure as the real data they have available to solve this problem. 
+
+```{r}
+# Loading the data
+train <- read.csv(file = "/Users/mac/Desktop/midterm/train.csv")
+test <- read.csv(file = "/Users/mac/Desktop/midterm/test.csv")
+```
+
+# 2.Exploratory Data Analysis 
+## 2.1 Data Summary
+```{r}
+# head(train)
+# head(test)
+```
+After watching the first ten rows of two datasets, we can conclude:
+1. As the project had presay, the names of every columns are anonymized, so we do not know what these variables' meaning.
+2. There are many zero values present in the data.
+```{r}
+print (paste("The number of NAs in the training set is:", sum(is.na(train))))
+print (paste("The number of NAs in the test set is:", sum(is.na(test))))
+```
+3. Neither the test set nor the training set has NAs.
+
+However, since the data size is a little huge, we cannot easily use summary() or str() to have a simple understing of the data-set. So, I just count the rows and columns of training set and test set.
+```{r}
+print (paste("The number of records in the training set:", dim(train)[1]))
+print (paste("The number of predictors in the training set:", dim(train)[2]))
+print (paste("The number of records in the test set:", dim(test)[1]))
+print (paste("The number of predictors in the test set:", dim(test)[2]))
+```
+As we can see, features in test set and training set are different. But this is because the tset set does not have target, and that is what I will do in test set if I take part in the competition. So, it does not metter.
+
+## 2.2 Target variable
+
+```{r }
+#ggplot(train,aes(x=target,alpha=1/10,fill='red'))+
+#  geom_density()+
+ # guides(fill=FALSE,alpha=FALSE)
+  
+```
+Because the dataset is very massive, so I have to rank the value to see the distribution plot of it.
+If we analysis the plot we can find that the distribution with majority of the data points having low value, and a huge amount of the data is 0. 
+```{r fig.height=3,fig.width=6}
+ggplot(train,aes(x=log(target),y=..density..))+
+  geom_histogram(fill='cornsilk',color='grey60',size=.2, alpha=.5)+
+  geom_density()
+```
+So, now we know the desity of the target variable. Also, we know that if we use target as dependent variable to fit the model, it is better to use log(target) instead of target.
+
+
+## 2.3 Other predictors
+There are near 5000 columns in the training set, which means I need to do the feature selection, in order to better fit a model.
+We know that there are a lot of 0s in the dataset, so we first remove them, and then, we can calculate the condition number to see if there is multicollinearity.
+```{r}
+# Because predictors with all 0s are meaningless and will affect our matrix operations, we remove them.
+# delete the 0 variable
+col_sub = apply(train, 2, function(col) any (col !=0 ))
+# Subset as usual
+new_train <- train[,col_sub]
+
+print (paste("The number of predictors that are not all 0s are:", dim(new_train)[2]))
+```
+So we know that there are 256 variables that all equals 0. Also, since they are all 0, they are meaningless in the model.
+
+
+However, there are still too many predictros.
+```{r}
+XX <- cor(new_train[,3:4737]) #Calculate the correlation coefficient matrix between independent variables
+kappa(XX,exact=TRUE) #calculate the condition number accurately
+# eigen(XX) 
+# The output is too huge, and I use another similar methods in modeling part, so I won't run this step again.
+```
+Since $6.187769e+19 >> 1000$, it shows that there is serious multicollinearity between the independent variables.
+
+We can use the Characteristic root judgment or step regression which may deal with this method. But they are both too slow to use step by step. In the meantime, the result  I get may not meet my ideas. So, I add a PCA model in the modeling part in order to deal with the multicollinearity.
+
+
+# 3. Modeling
+
+## 3.1 PCA
+Since the predictor I used is encrypted, so I don't need to estimate the actual meaning of each new variable temporarily by using the principal component. Although I acknowledge that in the specific analysis process, it is very necessary to understand the actual meaning of each variable as much as possible.
+Now, I am going to do PCA. Here, since there are more features than observation, the function I use is "prcomp".
+```{r fig.height=3,fig.width=6}
+sample <- new_train[,3:4737]
+sample.pr <- prcomp(sample,scale=TRUE)
+pre <- predict(sample.pr)
+# head(sample.pr)
+# summary(sample.pr)
+screeplot(sample.pr[1:10],type='lines') 
+data <- data.frame(x1=pre[,1],x2=pre[,2],x3=pre[,3],x4=pre[,4],x5=pre[,5],y=new_train$target)
+```
+The outcome is too huge, so I just show the scree plot of the PCA. 
+At first glance, the results shown in this plot are not good. But this is mainly caused by the existence of a large number of variables with only one or a few values, and they are independent. After I understand the variable structure of our original data. When the principal component is 5, an obvious inflection point appears. After the five variables produced by the principal component can cover 60% of the original variable, the contribution rate of the principal component sharply decreased. Therefore, the method I use is to use the top five principal components, although they can only represent 60% of the original independent variables. As for the other predictor, without greatly expanding the number of principal components, it is difficult for me to use them without considering the specific application background because they are not universal behaviors to the bank's customers.
+
+
+## 3.2 Clustering
+Since the result we want is to determine whether the customer has value, we can get a structured data type after converting the original variable. First, we cluster all the customers that are owned by the observations, that is, we can divide customers into several categories according to the behavior of the account. At the same time, we can classify their value levels according to the 1/3 and 2/3 quantiles. Then, according to the behavior of their account, first, get the type of the customer, and then get the value of transactions for each potential customer.
+```{r fig.height=3,fig.width=6}
+# Use tertiles to divide target into three parts, which are defined as low-value, medium-value, and high-value customers
+limit1 <- quantile(data$y,c(0.33,0.67))[1]
+limit2 <- quantile(data$y,c(0.33,0.67))[2]
+# And I define by myself, customers whose target value is above the median are valuable.
+for(i in 1:4459)
+  if (data$y[i] > limit2) {
+    data$valuable[i] <- 3
+  }else if(data$y[i] > limit1&&data$y[i] < limit2){
+    data$valuable[i] <- 2
+  }else{
+    data$valuable[i] <- 1
+  }
+
+# Cluster all the observations
+fviz_nbclust(data, kmeans, method = "wss") + 
+  geom_vline(xintercept = 3, linetype = 2)
+km_result <- kmeans(data, 3, nstart = 24)
+
+#Extract class labels and merge with the original data
+data <- cbind(data, cluster = km_result$cluster)
+```
+
+## 3.3 Multilevel regression
+Finally, do the multilevel linear regression on the processed data set.
+```{r}
+# Fit the 2 level multilevel model
+model <- lmer(log(y) ~1 +x1+x2+x3+x4+x5+ (1|cluster) + valuable,REML=FALSE, data=data)
+summary(model)
+```
+
+# 4.Results
+So far, I have completed the modeling part. So, it is time to see the results of the model. First of all, I need to admit that compared with Fixed effects, Random effects have a very large influence in predicting the target.
+From the output results, the fixed effects: intercept and valuable have the greatest impact, followed by X1, X4, and X5.
+
+It is common to calculate the confidence interval. 
+```{r message=FALSE}
+pander(confint(model))
+```
+From the confidence interval, we can see that all the coefficients of fixed effects are pretty small than random effects.
+After calculating the confidence interval I make a residual plot to see the residence of the model.
+It can be seen from the left residual plot that points are not evenly distributed randomly throughout the area, and there are certain groups of points. In the right plot, through spending the residual plot of a simple linear model, we can see that the result, in this case, maybe better than the multilevel results. 
+```{r}
+# The residual plot of the model
+y.res <- resid(model)
+predicted <- predict(model)
+data_a <- data.frame(y.res,predicted)
+p1 <- ggplot(data=data_a, mapping= aes(x=predicted, y=y.res)) + 
+  geom_point()
+model1 <- lm(log(y)~x1+x2+x3+x4+x5,data=data)
+y1.res <- resid(model1)
+predicted1 <- predict(model1)
+data_b <- data.frame(y1.res,predicted1)
+p2 <- ggplot(data=data_b, mapping= aes(x=predicted1, y=y1.res)) + 
+  geom_point()
+plot_grid(p1,p2,label_x = 0.1,ncol = 2)
+```
+
+# 5.Discussion
+I have to admit that my work has some flaws, and I will pay special attention to future projects.
+1. First of all, I understand that a more critical step is missing, which is to bring the coefficients of all the principal components used in the final model into the initial variables. The reason why I did not do this is that, even if I include the coefficients into the original independent variables, I cannot explain the specific economics since they are anonymous variables.
+2. The second point is that the model I used is not completely suitable. I understand that PCA is not a suitable method now for specific industry problems. When I find that the results of PCA are not good enough for modeling, I tried to learn some machine-learning descending dimension algorithm, but in the process of running the program I often break down, and I don't have a deep understanding of those models, so I finally used PCA's outcome as results.
+3. Because I want to combine the data with the knowledge learned this semester, I define some variables myself in order to achieve the goal. I know this is not a good habit, especially when I structure them without an in-depth understanding of the specific business. 
